@@ -20,6 +20,14 @@ import * as ts from "typescript";
 
 import * as Lint from "../index";
 
+const singeLineConfigOptionName = "singleLine";
+interface Options {
+    singleLine: "never" | "always";
+}
+// No-op type check
+/* tslint:disable-next-line:no-unused-expression */
+((null as any) as Options) as { [K in typeof singeLineConfigOptionName]: Options["singleLine"] };
+
 export class Rule extends Lint.Rules.AbstractRule {
     /* tslint:disable:object-literal-sort-keys */
     public static metadata: Lint.IRuleMetadata = {
@@ -27,8 +35,17 @@ export class Rule extends Lint.Rules.AbstractRule {
         description: Lint.Utils.dedent`
             Checks that type literal members are separated by semicolons.
             Enforces a trailing semicolon for multiline type literals.`,
-        optionsDescription: "Not configurable.",
-        options: null,
+        optionsDescription: `\`{${singeLineConfigOptionName}: "always"}\` enforces semicolon for one liners`,
+        options: {
+            type: "object",
+            properties: {
+                [singeLineConfigOptionName]: {
+                    type: "string",
+                    enum: ["always", "never"] as Array<Options["singleLine"]>,
+                },
+            },
+        },
+        hasFix: true,
         optionExamples: [true],
         type: "style",
         typescriptOnly: true,
@@ -43,42 +60,42 @@ export class Rule extends Lint.Rules.AbstractRule {
         "Did not expect single-line type literal to have a trailing ';'.";
 
     public apply(sourceFile: ts.SourceFile): Lint.RuleFailure[] {
-        return this.applyWithFunction(sourceFile, walk);
+        return this.applyWithFunction(
+            sourceFile,
+            walk,
+            this.ruleArguments[0] || {});
     }
 }
 
-function walk(ctx: Lint.WalkContext<void>): void {
-    const { sourceFile } = ctx;
+function walk(ctx: Lint.WalkContext<Partial<Options>>): void {
+    const { sourceFile, options } = ctx;
     ts.forEachChild(sourceFile, function cb(node: ts.Node): void {
         if (isTypeLiteralNode(node)) {
             check(node);
         }
         ts.forEachChild(node, cb);
     });
-
     function check(node: ts.TypeLiteralNode): void {
         node.members.forEach((member, idx) => {
             const end = member.end - 1;
-            // Trailing delimiter should be ommitted for a single-line type literal.
-            const shouldOmit = idx === node.members.length - 1 && isSameLine(sourceFile, node.getStart(sourceFile), node.getEnd());
+            // Check if delimiter should be ommitted for a single-line type literal.
+            const shouldOmit = options.singleLine === "always"
+                ? false
+                : idx === node.members.length - 1 && isSameLine(sourceFile, node.getStart(sourceFile), node.getEnd());
             const delimiter = sourceFile.text[end];
             switch (delimiter) {
                 case ";":
                     if (shouldOmit) {
-                        fail(Rule.FAILURE_STRING_TRAILING);
+                        ctx.addFailureAt(end, 1, Rule.FAILURE_STRING_TRAILING, Lint.Replacement.replaceFromTo(end, end + 1, ""));
                     }
                     break;
                 case ",":
-                    fail(Rule.FAILURE_STRING_COMMA);
+                    ctx.addFailureAt(end, 1, Rule.FAILURE_STRING_COMMA, Lint.Replacement.replaceFromTo(end, end + 1, ";"));
                     break;
                 default:
                     if (!shouldOmit) {
-                        fail(Rule.FAILURE_STRING_MISSING);
+                        ctx.addFailureAt(end, 1, Rule.FAILURE_STRING_MISSING, Lint.Replacement.replaceFromTo(end + 1, end + 1, ";"));
                     }
-            }
-
-            function fail(failure: string): void {
-                ctx.addFailureAt(end, 1, failure);
             }
         });
     }
